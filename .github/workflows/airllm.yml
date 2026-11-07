@@ -40,7 +40,7 @@ jobs:
           if hf_token:
               login(token=hf_token)
 
-          model = AutoModel.from_pretrained("meta-llama/Meta-Llama-3-8B-Instruct")
+          model = AutoModel.from_pretrained("Qwen/Qwen2.5-7B-Instruct")
 
           prompt = [os.environ.get("PROMPT_TEXT", "Hello world")]
 
