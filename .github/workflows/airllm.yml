@@ -1,0 +1,66 @@
+name: Run AirLLM Inference
+
+on:
+  workflow_dispatch:
+    inputs:
+      prompt:
+        description: 'Prompt for the model'
+        required: true
+        default: 'Explain how layer-wise GPU inference works in 2 sentences.'
+
+jobs:
+  run-inference:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install airllm bitsandbytes transformers torch huggingface_hub
+
+      - name: Run AirLLM script
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          PROMPT_TEXT: ${{ github.event.inputs.prompt }}
+        run: |
+          python -c '
+          import os
+          from airllm import AutoModel
+          from huggingface_hub import login
+
+          hf_token = os.environ.get("HF_TOKEN")
+          if hf_token:
+              login(token=hf_token)
+
+          model = AutoModel.from_pretrained("meta-llama/Meta-Llama-3-8B-Instruct")
+
+          prompt = [os.environ.get("PROMPT_TEXT", "Hello world")]
+
+          input_tokens = model.tokenizer(
+              prompt,
+              return_tensors="pt",
+              return_attention_mask=False,
+              truncation=True,
+              max_length=128,
+              padding=False
+          )
+
+          generation_output = model.generate(
+              input_tokens["input_ids"].to(model.device),
+              max_new_tokens=50,
+              use_cache=True,
+              return_dict_in_generate=True
+          )
+
+          output = model.tokenizer.decode(generation_output.sequences[0])
+          print("\n--- GENERATED OUTPUT ---")
+          print(output)
+          '
