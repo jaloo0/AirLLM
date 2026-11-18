@@ -1,4 +1,4 @@
-name: Run AirLLM Inference
+name: Run Hugging Face Inference
 
 on:
   workflow_dispatch:
@@ -7,60 +7,73 @@ on:
         description: 'Prompt for the model'
         required: true
         default: 'Explain how layer-wise GPU inference works in 2 sentences.'
+        type: string
+      model_id:
+        description: 'Hugging Face text-generation model ID'
+        required: true
+        default: 'HuggingFaceTB/SmolLM2-360M-Instruct'
+        type: string
 
 jobs:
   run-inference:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
 
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.10'
 
-      - name: Install dependencies
+      - name: Install CPU inference dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install airllm bitsandbytes transformers torch huggingface_hub
+          pip install torch --index-url https://download.pytorch.org/whl/cpu
+          pip install transformers
 
-      - name: Run AirLLM script
+      - name: Restore cached model files
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/huggingface/hub
+          key: ${{ runner.os }}-huggingface-${{ github.event.inputs.model_id }}
+
+      - name: Download model and generate response
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
           PROMPT_TEXT: ${{ github.event.inputs.prompt }}
+          MODEL_ID: ${{ github.event.inputs.model_id }}
         run: |
           python -c '
           import os
-          from airllm import AutoModel
-          from huggingface_hub import login
+          import torch
+          from transformers import AutoModelForCausalLM, AutoTokenizer
 
-          hf_token = os.environ.get("HF_TOKEN")
-          if hf_token:
-              login(token=hf_token)
+          model_id = os.environ["MODEL_ID"]
+          prompt = os.environ["PROMPT_TEXT"]
+          hf_token = os.environ.get("HF_TOKEN") or None
 
-          model = AutoModel.from_pretrained("Qwen/Qwen2.5-7B-Instruct")
+          tokenizer = AutoTokenizer.from_pretrained(model_id, token=hf_token)
+          model = AutoModelForCausalLM.from_pretrained(model_id, token=hf_token)
 
-          prompt = [os.environ.get("PROMPT_TEXT", "Hello world")]
+          if tokenizer.chat_template:
+              prompt = tokenizer.apply_chat_template(
+                  [{"role": "user", "content": prompt}],
+                  tokenize=False,
+                  add_generation_prompt=True,
+              )
 
-          input_tokens = model.tokenizer(
+          inputs = tokenizer(
               prompt,
               return_tensors="pt",
-              return_attention_mask=False,
               truncation=True,
-              max_length=128,
-              padding=False
+              max_length=1024,
           )
 
-          generation_output = model.generate(
-              input_tokens["input_ids"].to(model.device),
-              max_new_tokens=50,
-              use_cache=True,
-              return_dict_in_generate=True
-          )
+          with torch.inference_mode():
+              output = model.generate(**inputs, max_new_tokens=128, do_sample=False)
 
-          output = model.tokenizer.decode(generation_output.sequences[0])
-          print("\n--- GENERATED OUTPUT ---")
-          print(output)
+          generated_tokens = output[0, inputs["input_ids"].shape[1]:]
+          print("\n--- GENERATED RESPONSE ---")
+          print(tokenizer.decode(generated_tokens, skip_special_tokens=True))
           '
